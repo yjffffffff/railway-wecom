@@ -1,0 +1,17 @@
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Railway Cron 任务：每个交易日 15:30 运行（北京时间）
+# 注意：Railway Cron 使用 UTC，北京时间 15:30 = UTC 07:30
+# 实际建议用 GitHub Actions 定时触发 Railway 部署，或用外部 cron 服务
+# 这里配置为手动触发/按需运行
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 2
+
+[env]
+# 运行时环境变量（敏感值在 Railway Dashboard 设置，不写这里）
+PYTHONUNBUFFERED = "1"
+TZ = "Asia/Shanghai"
+LOG_LEVEL = "INFO"
