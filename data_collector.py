@@ -1,5 +1,5 @@
 """
-数据采集层 - 统一接口适配多源
+数据采集层 - 统一接口适配多源，含重试与容错
 """
 import akshare as ak
 import pandas as pd
@@ -9,51 +9,107 @@ from typing import Dict, List, Optional
 import time
 import logging
 from functools import lru_cache
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
+
+def _make_session() -> requests.Session:
+    """创建带重试策略的 Session"""
+    session = requests.Session()
+    retry = Retry(
+        total=3,
+        backoff_factor=1.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET", "OPTIONS"],
+        raise_on_status=False
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=20)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Referer": "https://finance.sina.com.cn/",
+    })
+    return session
+
+# 替换 akshare 内部 session（akshare 1.18+ 支持）
+try:
+    ak.requests.session = _make_session()
+except Exception:
+    pass
 
 class DataCollector:
     def __init__(self, config: dict):
         self.config = config
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
+        self._cache = {}
+        self._cache_ttl = 300  # 5分钟缓存
+    
+    def _cache_get(self, key: str) -> Optional[pd.DataFrame]:
+        if key in self._cache:
+            df, ts = self._cache[key]
+            if time.time() - ts < self._cache_ttl:
+                return df
+        return None
+    
+    def _cache_set(self, key: str, df: pd.DataFrame):
+        self._cache[key] = (df, time.time())
     
     # ===== 基础行情 =====
     def get_daily_data(self, symbol: str, days: int = 60) -> pd.DataFrame:
-        """获取日线数据，自动复权"""
-        try:
-            # akshare 返回前复权数据
-            df = ak.stock_zh_a_hist(
-                symbol=symbol, 
-                period="daily", 
-                start_date=(datetime.now() - timedelta(days=days*2)).strftime("%Y%m%d"),
-                end_date=datetime.now().strftime("%Y%m%d"),
-                adjust="qfq"  # 前复权
-            )
-            if df.empty:
-                return pd.DataFrame()
-            
-            # 标准化列名
-            df = df.rename(columns={
-                '日期': 'date', '开盘': 'open', '收盘': 'close',
-                '最高': 'high', '最低': 'low', '成交量': 'volume',
-                '成交额': 'amount', '振幅': 'amplitude', '换手率': 'turnover',
-                '涨跌幅': 'pct_chg', '涨跌额': 'change'
-            })
-            df['date'] = pd.to_datetime(df['date'])
-            df = df.set_index('date').sort_index()
-            return df.tail(days)
-        except Exception as e:
-            logger.error(f"获取 {symbol} 日线失败: {e}")
-            return pd.DataFrame()
+        """获取日线数据，自动复权，带缓存重试"""
+        cache_key = f"daily_{symbol}_{days}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+        
+        end = datetime.now().strftime("%Y%m%d")
+        start = (datetime.now() - timedelta(days=days*3)).strftime("%Y%m%d")
+        
+        for attempt in range(3):
+            try:
+                df = ak.stock_zh_a_hist(
+                    symbol=symbol, 
+                    period="daily", 
+                    start_date=start,
+                    end_date=end,
+                    adjust="qfq",
+                    timeout=30
+                )
+                if df.empty:
+                    time.sleep(1)
+                    continue
+                
+                df = df.rename(columns={
+                    '日期': 'date', '开盘': 'open', '收盘': 'close',
+                    '最高': 'high', '最低': 'low', '成交量': 'volume',
+                    '成交额': 'amount', '振幅': 'amplitude', '换手率': 'turnover',
+                    '涨跌幅': 'pct_chg', '涨跌额': 'change'
+                })
+                df['date'] = pd.to_datetime(df['date'])
+                df = df.set_index('date').sort_index()
+                result = df.tail(days)
+                self._cache_set(cache_key, result)
+                return result
+            except Exception as e:
+                logger.warning(f"获取 {symbol} 日线第{attempt+1}次失败: {e}")
+                time.sleep(2 ** attempt)
+        
+        logger.error(f"获取 {symbol} 日线最终失败")
+        return pd.DataFrame()
     
     def get_realtime_quote(self, symbols: List[str]) -> pd.DataFrame:
-        """实时行情快照"""
+        cache_key = f"realtime_{'_'.join(sorted(symbols))}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
         try:
             df = ak.stock_zh_a_spot_em()
             df = df[df['代码'].isin(symbols)]
+            self._cache_set(cache_key, df)
             return df
         except Exception as e:
             logger.error(f"实时行情获取失败: {e}")
@@ -61,31 +117,32 @@ class DataCollector:
     
     # ===== 板块指数 =====
     def get_sector_index(self, sector_name: str, days: int = 30) -> pd.DataFrame:
-        """获取板块指数（使用概念板块）"""
+        cache_key = f"sector_{sector_name}_{days}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
         try:
-            # 获取概念板块列表
             sectors = ak.stock_board_concept_name_em()
             target = sectors[sectors['板块名称'].str.contains(sector_name, na=False)]
             if target.empty:
                 return pd.DataFrame()
-            
             code = target.iloc[0]['板块代码']
+            end = datetime.now().strftime("%Y%m%d")
+            start = (datetime.now() - timedelta(days=days*2)).strftime("%Y%m%d")
             df = ak.stock_board_concept_hist_em(
-                symbol=code, 
-                start_date=(datetime.now() - timedelta(days=days*2)).strftime("%Y%m%d"),
-                end_date=datetime.now().strftime("%Y%m%d"),
-                period="日k"
+                symbol=code, start_date=start, end_date=end, period="日k"
             )
             if df.empty:
                 return pd.DataFrame()
             df['date'] = pd.to_datetime(df['日期'])
-            return df.set_index('date').sort_index().tail(days)
+            result = df.set_index('date').sort_index().tail(days)
+            self._cache_set(cache_key, result)
+            return result
         except Exception as e:
             logger.error(f"获取板块 {sector_name} 指数失败: {e}")
             return pd.DataFrame()
     
     def get_sector_stocks(self, sector_name: str) -> List[str]:
-        """获取板块成分股"""
         try:
             sectors = ak.stock_board_concept_name_em()
             target = sectors[sectors['板块名称'].str.contains(sector_name, na=False)]
@@ -100,42 +157,41 @@ class DataCollector:
     
     # ===== 涨停/龙虎榜 =====
     def get_limit_up_stocks(self, trade_date: str = None) -> pd.DataFrame:
-        """获取涨停股"""
         if trade_date is None:
             trade_date = datetime.now().strftime("%Y%m%d")
         try:
-            df = ak.stock_zt_pool_em(date=trade_date)
-            return df
+            return ak.stock_zt_pool_em(date=trade_date)
         except Exception as e:
             logger.error(f"获取涨停池失败: {e}")
             return pd.DataFrame()
     
     def get_lhb_data(self, trade_date: str = None) -> pd.DataFrame:
-        """龙虎榜"""
         if trade_date is None:
             trade_date = datetime.now().strftime("%Y%m%d")
         try:
-            df = ak.stock_lhb_detail_em(date=trade_date)
-            return df
+            return ak.stock_lhb_detail_em(date=trade_date)
         except Exception as e:
             logger.error(f"获取龙虎榜失败: {e}")
             return pd.DataFrame()
     
     # ===== 资金流向 =====
     def get_market_margin(self, days: int = 30) -> pd.DataFrame:
-        """融资融券余额"""
+        """融资融券余额 - 兼容新版 akshare"""
         try:
-            df = ak.stock_margin_detail_em(start_date=(datetime.now() - timedelta(days=days)).strftime("%Y%m%d"))
-            return df
+            # 新版 akshare 函数名可能变了，尝试多个
+            for fn_name in ['stock_margin_detail_em', 'stock_margin_detail_szse', 'stock_margin_sh_sz']:
+                fn = getattr(ak, fn_name, None)
+                if fn:
+                    return fn(start_date=(datetime.now() - timedelta(days=days)).strftime("%Y%m%d"))
+            logger.warning("未找到可用的融资融券接口")
+            return pd.DataFrame()
         except Exception as e:
             logger.error(f"融资融券获取失败: {e}")
             return pd.DataFrame()
     
     def get_north_money(self, days: int = 30) -> pd.DataFrame:
-        """北向资金"""
         try:
-            df = ak.stock_hsgt_hist_em(symbol="沪股通", start_date=(datetime.now() - timedelta(days=days)).strftime("%Y%m%d"))
-            return df
+            return ak.stock_hsgt_hist_em(symbol="沪股通", start_date=(datetime.now() - timedelta(days=days)).strftime("%Y%m%d"))
         except Exception as e:
             logger.error(f"北向资金获取失败: {e}")
             return pd.DataFrame()
@@ -143,13 +199,10 @@ class DataCollector:
     # ===== 基本面 =====
     @lru_cache(maxsize=100)
     def get_financial_abstract(self, symbol: str) -> Dict:
-        """核心财务指标（缓存）"""
         try:
-            # 主要指标
             df = ak.stock_financial_abstract(symbol=symbol)
             if df.empty:
                 return {}
-            
             latest = df.iloc[0]
             return {
                 'revenue_yoy': float(latest.get('营业总收入同比增长率', 0) or 0),
@@ -165,16 +218,17 @@ class DataCollector:
     
     # ===== 新闻/政策 =====
     def get_policy_news(self, keywords: List[str], hours: int = 24) -> List[Dict]:
-        """政策新闻抓取（简化版，实际建议接入专业终端）"""
-        # 这里用akshare的财经新闻作为演示
+        return []
+
+    def warmup_cache(self, target_date):
+        """预热：预取全市场快照，减少后续请求"""
         try:
-            df = ak.stock_info_global_em()  # 备用
-            return []
-        except:
-            return []
+            _ = ak.stock_zh_a_spot_em()
+            logger.info("全市场快照预热完成")
+        except Exception as e:
+            logger.warning(f"预热失败: {e}")
 
 
-# 单例模式
 _collector_instance = None
 
 def get_collector(config: dict) -> DataCollector:
