@@ -60,7 +60,7 @@ class DataCollector:
     
     # ===== 基础行情 =====
     def get_daily_data(self, symbol: str, days: int = 60) -> pd.DataFrame:
-        """获取日线数据，自动复权，带缓存重试"""
+        """获取日线数据，多源切换：东财 -> 新浪 -> 腾讯 -> 网易"""
         cache_key = f"daily_{symbol}_{days}"
         cached = self._cache_get(cache_key)
         if cached is not None:
@@ -69,36 +69,37 @@ class DataCollector:
         end = datetime.now().strftime("%Y%m%d")
         start = (datetime.now() - timedelta(days=days*3)).strftime("%Y%m%d")
         
-        for attempt in range(3):
-            try:
-                df = ak.stock_zh_a_hist(
-                    symbol=symbol, 
-                    period="daily", 
-                    start_date=start,
-                    end_date=end,
-                    adjust="qfq",
-                    timeout=30
-                )
-                if df.empty:
-                    time.sleep(1)
-                    continue
-                
-                df = df.rename(columns={
-                    '日期': 'date', '开盘': 'open', '收盘': 'close',
-                    '最高': 'high', '最低': 'low', '成交量': 'volume',
-                    '成交额': 'amount', '振幅': 'amplitude', '换手率': 'turnover',
-                    '涨跌幅': 'pct_chg', '涨跌额': 'change'
-                })
-                df['date'] = pd.to_datetime(df['date'])
-                df = df.set_index('date').sort_index()
-                result = df.tail(days)
-                self._cache_set(cache_key, result)
-                return result
-            except Exception as e:
-                logger.warning(f"获取 {symbol} 日线第{attempt+1}次失败: {e}")
-                time.sleep(2 ** attempt)
+        # 尝试多个数据源（akshare 1.18+ 支持）
+        source_funcs = [
+            ("东财", lambda: ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date=start, end_date=end, adjust="qfq", timeout=30)),
+            ("新浪", lambda: ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date=start, end_date=end, adjust="qfq", timeout=30, indicator="sina")),
+            ("腾讯", lambda: ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date=start, end_date=end, adjust="qfq", timeout=30, indicator="tx")),
+            ("网易", lambda: ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date=start, end_date=end, adjust="qfq", timeout=30, indicator="163")),
+        ]
         
-        logger.error(f"获取 {symbol} 日线最终失败")
+        for name, fn in source_funcs:
+            for attempt in range(2):
+                try:
+                    df = fn()
+                    if df is not None and not df.empty:
+                        df = df.rename(columns={
+                            '日期': 'date', '开盘': 'open', '收盘': 'close',
+                            '最高': 'high', '最低': 'low', '成交量': 'volume',
+                            '成交额': 'amount', '振幅': 'amplitude', '换手率': 'turnover',
+                            '涨跌幅': 'pct_chg', '涨跌额': 'change'
+                        })
+                        df['date'] = pd.to_datetime(df['date'])
+                        df = df.set_index('date').sort_index()
+                        result = df.tail(days)
+                        self._cache_set(cache_key, result)
+                        logger.debug(f"{symbol} 使用 {name} 数据源成功")
+                        return result
+                except Exception as e:
+                    logger.debug(f"{symbol} {name} 第{attempt+1}次失败: {e}")
+                    time.sleep(1)
+            logger.warning(f"{symbol} {name} 数据源不可用")
+        
+        logger.error(f"获取 {symbol} 日线最终失败：所有数据源均不可用")
         return pd.DataFrame()
     
     def get_realtime_quote(self, symbols: List[str]) -> pd.DataFrame:
