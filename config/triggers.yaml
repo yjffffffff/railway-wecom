@@ -4,6 +4,7 @@
 
 # 数据源配置
 data_source:
+  use_eastmoney: true
   use_akshare: true
   use_tushare: false
 
