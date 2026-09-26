@@ -69,12 +69,12 @@ class DataCollector:
         end = datetime.now().strftime("%Y%m%d")
         start = (datetime.now() - timedelta(days=days*3)).strftime("%Y%m%d")
         
-        # 尝试多个数据源（akshare 1.18+ 支持）
+        # 尝试多个数据源函数（akshare 1.18+）
         source_funcs = [
             ("东财", lambda: ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date=start, end_date=end, adjust="qfq", timeout=30)),
-            ("新浪", lambda: ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date=start, end_date=end, adjust="qfq", timeout=30, indicator="sina")),
-            ("腾讯", lambda: ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date=start, end_date=end, adjust="qfq", timeout=30, indicator="tx")),
-            ("网易", lambda: ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date=start, end_date=end, adjust="qfq", timeout=30, indicator="163")),
+            ("新浪", lambda: getattr(ak, 'stock_zh_a_hist_sina', lambda **_: pd.DataFrame())(symbol=symbol, period="daily", start_date=start, end_date=end, adjust="qfq")),
+            ("腾讯", lambda: getattr(ak, 'stock_zh_a_hist_tx', lambda **_: pd.DataFrame())(symbol=symbol, period="daily", start_date=start, end_date=end, adjust="qfq")),
+            ("网易", lambda: getattr(ak, 'stock_zh_a_hist_163', lambda **_: pd.DataFrame())(symbol=symbol, period="daily", start_date=start, end_date=end, adjust="qfq")),
         ]
         
         for name, fn in source_funcs:
