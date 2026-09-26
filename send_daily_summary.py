@@ -28,6 +28,20 @@ def run():
     prev_m = m_df.iloc[-2]
     drop_yi = (prev_m['融资余额'] - last_m['融资余额']) / 1e8
 
+    # 2. 板块真实强弱计算（根据各板块龙头股票当天的平均涨跌幅自动计算排序）
+    sector_perf = {}
+    for sector_cfg in sel.sector_whitelist:
+        sector_name = sector_cfg['name']
+        symbols = sel._get_sector_symbols(sector_cfg)
+        chgs = []
+        for s in symbols:
+            df = col.get_daily_data(s, days=2)
+            if not df.empty and 'pct_chg' in df.columns:
+                chgs.append(df.iloc[-1]['pct_chg'])
+        if chgs:
+            sector_perf[sector_name] = sum(chgs) / len(chgs)
+    sorted_sectors = sorted(sector_perf.items(), key=lambda x: x[1], reverse=True)
+
     # 3. 股票分析与评分
     analyzed = []
     for sector_cfg in sel.sector_whitelist:
@@ -64,10 +78,11 @@ def run():
     md += f"- **创业板指**: {cy_c:.2f} ({cy_p:+.2f}%) | 两市成交: **{tot_amt:.2f}万亿**\n"
     md += f"- **全市场两融**: {rz_tot:.3f}万亿 (单日净减 **{drop_yi:.1f}亿** 🚨触发L6风控)\n\n"
 
-    md += "### 🏆 二、重点监控板块\n"
-    md += "- 🟢 **冰雪经济 / 体育产业**: +0.66%（逆市抗跌飘红）\n"
-    md += "- ⚪ **生物制造 / 户外露营**: -0.27% ~ -0.30%\n"
-    md += "- 🔴 **旅游文旅 / 银发经济**: -2.67% ~ -3.38%（随大盘回调）\n\n"
+    md += "### 🏆 二、重点监控板块（动态强弱榜）\n"
+    for name, chg in sorted_sectors:
+        tag = "🟢" if chg > 0 else "⚪" if chg >= -1.0 else "🔴"
+        md += f"- {tag} **{name}**: `{chg:+.2f}%`\n"
+    md += "\n"
 
     md += "### 🎯 三、选股模型评分 TOP3（阈值 70）\n"
     for i, r in enumerate(analyzed[:3], 1):
