@@ -89,7 +89,7 @@ def main():
     collector = DataCollector(config)
     selector = StockSelector(config, collector)
     pusher = WeComPusher(config)
-    engine = TriggerEngine(config, collector, selector, pusher)
+    engine = TriggerEngine(config, collector, selector, pusher, force=args.force)
     
     # 测试模式：替换 pusher.push 为打印
     if args.mode == 'test':

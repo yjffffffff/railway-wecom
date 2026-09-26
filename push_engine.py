@@ -176,9 +176,9 @@ class WeComPusher:
         
         return md
     
-    def push(self, msg: PushMessage) -> bool:
+    def push(self, msg: PushMessage, force: bool = False) -> bool:
         """发送推送"""
-        if not self._check_frequency(msg):
+        if not force and not self._check_frequency(msg):
             return False
         
         content = self._format_markdown(msg)
@@ -246,11 +246,12 @@ class WeComPusher:
 
 class TriggerEngine:
     """触发规则引擎"""
-    def __init__(self, config: dict, collector, selector, pusher: WeComPusher):
+    def __init__(self, config: dict, collector, selector, pusher: WeComPusher, force: bool = False):
         self.config = config
         self.collector = collector
         self.selector = selector
         self.pusher = pusher
+        self.force = force
         self.rules = config.get('push_rules', {})
         self.last_macro_signal = None
     
@@ -302,7 +303,7 @@ class TriggerEngine:
                     'details': str(r.details)[:200]
                 }
             )
-            self.pusher.push(msg)
+            self.pusher.push(msg, force=self.force)
             time.sleep(0.5)  # 避免频控
     
     def check_policy_landing(self):
@@ -355,7 +356,7 @@ class TriggerEngine:
                             'ma10': f"{last.get('MA10', 0):.2f}"
                         }
                     )
-                    self.pusher.push(msg)
+                    self.pusher.push(msg, force=self.force)
     
     def check_risk_circuit(self):
         """L6 风控熔断检查"""
@@ -378,7 +379,7 @@ class TriggerEngine:
                         timestamp=datetime.now(),
                         metadata={'margin_drop_yi': f"{margin_drop/1e8:.1f}"}
                     )
-                    self.pusher.push(msg)
+                    self.pusher.push(msg, force=self.force)
         except Exception as e:
             logger.error(f"风控检查失败: {e}")
     
