@@ -20,6 +20,7 @@ on:
 env:
   PYTHON_VERSION: '3.11'
   WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
+  TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
   AKSHARE_ENABLED: 'true'
   LOG_LEVEL: 'INFO'
   TIMEZONE: 'Asia/Shanghai'
