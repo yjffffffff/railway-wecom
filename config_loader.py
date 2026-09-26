@@ -7,9 +7,35 @@ from pathlib import Path
 from typing import Dict, Any
 
 
+def _load_dotenv(path: Path) -> None:
+    """把 .env 键值写入 os.environ（仅补齐缺失项，不覆盖已有环境变量）
+
+    本地测试时按 README 的 `cp .env.example .env` 流程即可直接生效；
+    Railway / GitHub Actions 注入的环境变量优先级更高。
+    """
+    if not path.exists():
+        return
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                key, _, val = line.partition('=')
+                key = key.strip()
+                val = val.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = val
+    except Exception as e:
+        print(f"警告: 读取 {path.name} 失败: {e}")
+
+
 def load_config() -> Dict[str, Any]:
     """加载配置，环境变量优先于 YAML"""
     config_path = Path(__file__).parent / 'config' / 'triggers.yaml'
+
+    # 0. 本地 .env 兜底（已存在的环境变量不覆盖）
+    _load_dotenv(Path(__file__).parent / '.env')
     
     # 1. 读取 YAML 基础配置
     if config_path.exists():
