@@ -7,7 +7,7 @@ import argparse
 import logging
 import sys
 import os
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 # 添加当前目录到路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -23,6 +23,39 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
+
+
+def resolve_trade_date() -> date:
+    """未指定日期时自动定位最近交易日
+    优先级：今天(若为交易日) > 上一交易日
+    容错：最近10个交易日内回溯，遇数据源无数据自动再回溯
+    """
+    import akshare as ak
+    import pandas as pd
+
+    today = date.today()
+    # 若今天已过收盘时间(15:30)，仍视为当日可用
+    cutoff = datetime.now().time()
+    if today.weekday() < 5 and cutoff.hour < 15:
+        logger.info(f"今日 {today} 尚未收盘，跳过")
+    else:
+        try:
+            cal = ak.tool_trade_date_hist_sina()
+            days = pd.to_datetime(cal['trade_date']).dt.date
+            past = days[days <= today]
+            if len(past) == 0:
+                return today
+            picked = past.iloc[-1]
+            logger.info(f"自动定位最近交易日: {picked} (今天 {today})")
+            return picked
+        except Exception as e:
+            logger.warning(f"交易日历获取失败({e})，回退到最近工作日")
+
+    # 兜底：跳过周末
+    d = today - timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
 
 
 def parse_args():
@@ -45,11 +78,7 @@ def main():
             logger.error("日期格式错误，应为 YYYY-MM-DD")
             return 1
     else:
-        target_date = date.today()
-        # 简单判断是否为交易日（周末跳过）
-        if target_date.weekday() >= 5:
-            logger.info(f"{target_date} 非交易日，退出")
-            return 0
+        target_date = resolve_trade_date()
     
     logger.info(f"=== 启动扫描: {target_date} ===")
     
@@ -58,7 +87,7 @@ def main():
     
     # 初始化组件
     collector = DataCollector(config)
-    selector = StockSelector(config, collector, target_date)
+    selector = StockSelector(config, collector)
     pusher = WeComPusher(config)
     engine = TriggerEngine(config, collector, selector, pusher)
     
@@ -70,10 +99,6 @@ def main():
             return True
         pusher.push = test_push
         logger.info("测试模式：不发送实际推送")
-    
-    # 预热：获取全市场数据缓存
-    logger.info("预热数据缓存...")
-    collector.warmup_cache(target_date)
     
     # 运行触发检查
     logger.info("运行触发引擎...")
