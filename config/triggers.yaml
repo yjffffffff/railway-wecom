@@ -4,11 +4,11 @@
 
 # 数据源配置
 data_source:
+  use_tushare: true
   use_eastmoney: true
   use_akshare: true
-  use_tushare: false
 
-# Tushare 配置（备用）
+# Tushare 配置（主数据源，需 token）
 tushare:
   token: ""
 
