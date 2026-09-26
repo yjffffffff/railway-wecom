@@ -27,6 +27,15 @@ class SetupResult:
     timestamp: datetime
 
 class TechnicalAnalyzer:
+    # 各形态阶段的基础分（满分为 40）
+    PHASE_SCORES = {
+        'CONFIRMED': 40,
+        'BREAKOUT': 30,
+        'PLATFORM': 15,
+        'SHRINK': 5,
+        'NONE': 0,
+    }
+
     def __init__(self, params: dict):
         self.params = params
     
@@ -209,14 +218,7 @@ class TechnicalAnalyzer:
     
     def _calc_setup_score(self, phase: str, details: Dict, fund_score: float, rs_score: float) -> float:
         """综合选股评分"""
-        phase_scores = {
-            'CONFIRMED': 40,
-            'BREAKOUT': 30,
-            'PLATFORM': 15,
-            'SHRINK': 5,
-            'NONE': 0
-        }
-        base = phase_scores.get(phase, 0)
+        base = self.PHASE_SCORES.get(phase, 0)
         # 基本面权重 35%，相对强度 25%
         total = base + fund_score * 0.35 + rs_score * 0.25
         return min(total, 100)
@@ -235,6 +237,7 @@ class StockSelector:
     def scan_all(self) -> List[SetupResult]:
         """全量扫描白名单板块"""
         analyzed = []
+        n_fundamental = 0
         for sector_cfg in self.sector_whitelist:
             sector_name = sector_cfg['name']
             symbols = self._get_sector_symbols(sector_cfg)
@@ -246,11 +249,22 @@ class StockSelector:
                     df = self.collector.get_daily_data(symbol, days=60)
                     if df.empty:
                         continue
-                    fundamental = self.collector.get_financial_abstract(symbol)
                     name = self._get_stock_name(symbol)
-                    result = self.analyzer.analyze(df, symbol, name, sector_name, fundamental)
-                    if result:
-                        analyzed.append(result)
+                    # 先用价格形态评分（不取基本面）；确认"拉满基本面也够不到阈值"
+                    # 的股票直接跳过，避免无谓的财务接口请求（新浪接口有抓取频率限制）
+                    result = self.analyzer.analyze(df, symbol, name, sector_name, {})
+                    if result is None:
+                        continue
+                    if self._should_fetch_fundamental(result):
+                        n_fundamental += 1
+                        logger.info(
+                            f"{symbol} 形态 {result.phase}（初评 {result.setup_score:.1f}）"
+                            f" 具备达标可能，拉取基本面")
+                        fundamental = self.collector.get_financial_abstract(symbol)
+                        if fundamental:
+                            result = self.analyzer.analyze(
+                                df, symbol, name, sector_name, fundamental)
+                    analyzed.append(result)
                 except Exception as e:
                     logger.error(f"分析 {symbol} 失败: {e}")
                     continue
@@ -262,9 +276,24 @@ class StockSelector:
                 f"{r.name}({r.symbol}) {r.phase} {r.setup_score:.1f}" for r in analyzed[:3])
             logger.info(f"评分 TOP3（推送阈值 {self.min_setup_score}）: {top}")
         results = [r for r in analyzed if r.setup_score >= self.min_setup_score]
-        logger.info(f"扫描完成: 分析 {len(analyzed)} 只，达标 {len(results)} 只")
+        logger.info(
+            f"扫描完成: 分析 {len(analyzed)} 只，达标 {len(results)} 只，"
+            f"已取基本面 {n_fundamental} 只")
         return results
     
+    def _should_fetch_fundamental(self, result: SetupResult) -> bool:
+        """判断是否值得再取基本面数据（避免无谓请求新浪财务接口）
+
+        1) 形态已进入候选阶段（平台/突破/回踩确认）→ 拉取，日志评分更完整；
+        2) 其余形态用"基本面满分时能否达标"精确判断，阈值调低时依然正确
+           （权重与 _calc_setup_score 一致：形态 40 + 基本面 35% + 相对强度 25%）。
+        """
+        if result.phase in ('PLATFORM', 'BREAKOUT', 'CONFIRMED'):
+            return True
+        base = self.analyzer.PHASE_SCORES.get(result.phase, 0)
+        max_score = base + 100 * 0.35 + result.rs_score * 0.25
+        return max_score >= self.min_setup_score
+
     def _get_sector_symbols(self, sector_cfg: dict) -> List[str]:
         """获取板块成分股，优先用配置的龙头"""
         leaders = sector_cfg.get('leaders', [])
