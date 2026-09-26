@@ -6,8 +6,9 @@ requests>=2.31.0
 pyyaml>=6.0.1
 python-dateutil>=2.8.2
 
-# 可选：tushare 备用
-# tushare>=1.2.75
+# 可选：tushare 备用（配置 TUSHARE_TOKEN 后作为首选数据源，
+# 未配置 token 时自动跳过；不装也不影响腾讯/东财/akshare 兜底）
+tushare>=1.2.75
 
 # 调试/开发
 # pytest>=7.4.0

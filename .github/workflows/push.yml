@@ -22,6 +22,9 @@ env:
   WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
   TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
   AKSHARE_ENABLED: 'true'
+  EASTMONEY_ENABLED: 'true'
+  TENCENT_ENABLED: 'true'
+  EM_OVERSEAS: 'true'
   LOG_LEVEL: 'INFO'
   TIMEZONE: 'Asia/Shanghai'
 

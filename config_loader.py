@@ -24,6 +24,8 @@ def load_config() -> Dict[str, Any]:
         # 数据源
         'TUSHARE_TOKEN': ('tushare', 'token'),
         'AKSHARE_ENABLED': ('data_source', 'use_akshare'),
+        'EASTMONEY_ENABLED': ('data_source', 'use_eastmoney'),
+        'TENCENT_ENABLED': ('data_source', 'use_tencent'),
         # 企微
         'WECOM_CORP_ID': ('wecom', 'corp_id'),
         'WECOM_AGENT_ID': ('wecom', 'agent_id'),
@@ -54,7 +56,14 @@ def load_config() -> Dict[str, Any]:
     
     # 3. 设置默认值
     defaults = {
-        'data_source': {'use_akshare': True, 'use_tushare': False},
+        'data_source': {
+            'use_akshare': True,
+            'use_tushare': False,
+            'use_eastmoney': True,
+            'use_tencent': True,
+            # 日线数据源优先级：云端 IP 常被东财断连，故腾讯优先于东财
+            'daily_priority': ['tushare', 'tencent', 'eastmoney', 'akshare'],
+        },
         'tushare': {'token': ''},
         'wecom': {
             'corp_id': '', 'agent_id': '', 'secret': '', 'webhook_url': '',

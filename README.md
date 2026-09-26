@@ -74,9 +74,12 @@ railway run python main.py --date 2026-09-24 --mode scan
 railway-wecom/
 ├── main.py              # CLI 入口
 ├── config_loader.py     # 配置加载（YAML + ENV）
-├── data_collector.py    # 数据采集（akshare/tushare）
+├── data_collector.py    # 数据采集（多源自动切换 + 熔断）
+├── eastmoney_client.py  # 东财直连（快照/K线）
+├── tencent_client.py    # 腾讯直连（日线/实时，云端友好）
 ├── stock_selector.py    # 选股引擎（五阶段评分）
 ├── push_engine.py       # 触发引擎 + 企微推送
+├── check_sources.py     # 数据源连通性自检脚本
 ├── config/
 │   └── triggers.yaml    # 核心配置（板块/龙头/参数）
 ├── requirements.txt
@@ -87,9 +90,25 @@ railway-wecom/
 ```
 
 ## 数据源说明
-- **主数据源**：akshare（免费、无需 Token、覆盖全市场日线/板块/两融）
-- **备用数据源**：tushare Pro（需 Token，数据更标准）
-- 自动缓存到 `data/` 目录，避免重复请求
+日线数据按 `data_source.daily_priority` 顺序自动切换，失败自动降级：
+
+| 顺序 | 数据源 | 说明 |
+|------|--------|------|
+| 1 | tushare Pro | 配置 `TUSHARE_TOKEN` 后启用，最稳定（可选） |
+| 2 | **腾讯直连** | `proxy.finance.qq.com` / `qt.gtimg.cn`，云端 IP 友好，日线主力来源 |
+| 3 | 东财直连 | `push2his` K线接口在云端/云主机 IP 上会被拒连（RemoteDisconnected） |
+| 4 | akshare | 先新浪日线（`stock_zh_a_daily`），再东财日线；财务指标走新浪关键指标 |
+
+- 某数据源连续失败会自动**熔断 600 秒**（`SOURCE_COOLDOWN_SECONDS` 可调），避免每只股票都白等超时
+- 实时行情（股票名称/快照）：腾讯直连 → 东财直连 → akshare
+- 统一口径：`volume=股 / amount=元 / turnover=% / pct_chg=%`
+
+### 数据源自检
+在 Railway / GitHub Actions 等云端环境排查“取不到数据”时先跑：
+```bash
+python check_sources.py 000962 600738
+```
+输出各数据源可用性与耗时；只要「腾讯日线」或「akshare新浪日线」为 OK，工作流即可正常取数。
 
 ## 自定义扩展
 - **新增板块**：编辑 `config/triggers.yaml` 的 `sector_whitelist`
@@ -101,6 +120,17 @@ railway-wecom/
 - 企微应用消息频控：同一内容 30 分钟内不重复
 - 仅监控 A 股主板/创业板，不含北交所/科创板（可扩展）
 - 历史样本仅供复盘参考，不参与实时扫描
+
+## 常见问题
+**Q: 日志出现 `Remote end closed connection without response` / `所有数据源均不可用`？**
+A: 东财 `push2his` K线接口对云端/机房 IP 会直接断连（akshare 日线同源东财，一并失败）。
+已内置腾讯/新浪独立数据源自动降级，正常情况下日志会显示
+`日线获取成功: tencent（60 根）`；若仍失败，先执行 `python check_sources.py` 定位出口网络。
+
+**Q: 为什么没有推送？**
+A: L4 默认阈值较高（`push_rules.L4_stock_pick.min_setup_score`，默认 70）。
+日志中的 `评分 TOP3（推送阈值 70）`、`扫描完成: 分析 N 只，达标 M 只` 可用于确认取数与评分链路是否正常；
+需要放宽时降低该阈值或在 `config/triggers.yaml` 中调整。
 
 ## 免责声明
 本系统仅供量化研究与监控辅助，**不构成投资建议**。实盘决策请结合基本面、资金面、风控体系综合判断。

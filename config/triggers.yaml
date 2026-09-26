@@ -7,6 +7,10 @@ data_source:
   use_tushare: true
   use_eastmoney: true
   use_akshare: true
+  use_tencent: true
+  # 日线数据源优先级（依次尝试，失败自动切换并熔断）
+  # 云端 IP 常被东财 push2his 断连，故腾讯直连优先于东财
+  daily_priority: [tushare, tencent, eastmoney, akshare]
 
 # Tushare 配置（主数据源，需 token）
 tushare:
@@ -83,7 +87,7 @@ sector_whitelist:
       - "000962"  # 中体产业
       - "600738"  # 通程控股
       - "002639"  # 雅莹股份
-      - "603573"  # 荣泰健康
+      - "603579"  # 荣泰健康（原 603573 为无效代码）
     weight: 1.0
   
   # 2. 户外运动/露营
@@ -192,7 +196,7 @@ sector_whitelist:
     keywords: ["体育", "健身", "赛事", "体育用品", "体育场馆"]
     leaders:
       - "000962"  # 中体产业
-      - "603573"  # 荣泰健康
+      - "603579"  # 荣泰健康（原 603573 为无效代码）
       - "002639"  # 雅莹股份
       - "600738"  # 通程控股
     weight: 0.9
@@ -226,7 +230,7 @@ focus_stocks:
     notes: "高端女装+户外滑雪服双赛道"
     watch_level: "medium"
   
-  - symbol: "603573"
+  - symbol: "603579"
     name: "荣泰健康"
     sector: "体育/银发"
     notes: "按摩椅龙头，银发+体育双主题"

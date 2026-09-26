@@ -20,21 +20,23 @@ CST = timezone(timedelta(hours=8))
 UT = "bd1d9ddb04089700cf9c27f6f7426281"
 UT_KLINE = "fa5fd1943c67418ea634a5f3508544a5fee1ac"
 
-# 国内主机池
+# 行情/快照主机池（clist/ulist/stock 接口）
 _HOSTS_CN = [
     "82.push2.eastmoney.com",
     "33.push2.eastmoney.com", 
     "17.push2.eastmoney.com",
     "push2.eastmoney.com",
-    "push2delay.eastmoney.com",   # 海外专用延迟行情主机
+    "push2delay.eastmoney.com",   # 海外专用延迟行情主机（仅实时快照，无历史K线）
 ]
 
-# K线专用主机
-KLINE_HOSTS = ["push2his.eastmoney.com", "push2delay.eastmoney.com"]
+# K线专用主机：实测仅 push2his 提供历史 K 线
+# （push2delay 对 kline 接口返回空 klines，拿它做兜底只会白等）
+KLINE_HOSTS = [h.strip() for h in os.environ.get(
+    "EM_KLINE_HOSTS", "push2his.eastmoney.com").split(",") if h.strip()]
 
 # 海外环境变量控制主机优先级
 if os.environ.get("EM_OVERSEAS", "") in ("1", "true"):
-    HOSTS = _HOSTS_CN[-1:] + _HOSTS_CN[:-1]  # push2delay 优先
+    HOSTS = ["push2delay.eastmoney.com"] + [h for h in _HOSTS_CN if h != "push2delay.eastmoney.com"]
 else:
     HOSTS = _HOSTS_CN
 
@@ -42,7 +44,16 @@ CONTEXT = ssl.create_default_context()
 CONTEXT.check_hostname = False
 CONTEXT.verify_mode = ssl.CERT_NONE
 
-UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0"}
+UA = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9",
+    "Referer": "https://quote.eastmoney.com/",
+    "Connection": "close",
+}
 
 
 def _num(v) -> Optional[float]:
@@ -52,26 +63,31 @@ def _num(v) -> Optional[float]:
         return None
 
 
-def get_json(path: str, hosts: List[str] = None, max_retries: int = 7) -> Dict:
-    """多主机轮询 + 指数退避重试
-    重试间隔: 0, 1, 2, 4, 8, 8, 8 秒
+def get_json(path: str, hosts: List[str] = None, max_retries: int = None,
+             timeout: float = None) -> Dict:
+    """多主机轮询 + 重试（云端 IP 常被东财直接断连，失败后快速轮换/重试）
+
+    可用环境变量调整：EM_MAX_RETRIES（默认 5）、EM_TIMEOUT（默认 10 秒）
     """
     hosts = hosts or HOSTS
+    max_retries = max_retries or int(os.environ.get("EM_MAX_RETRIES", "5"))
+    timeout = timeout or float(os.environ.get("EM_TIMEOUT", "10"))
+    backoff = (0, 1, 2, 3, 4, 5, 5, 5)
     last_err = None
-    for i, sleep_s in enumerate((0, 1, 2, 4, 8, 8, 8)[:max_retries]):
+    for i in range(max(1, max_retries)):
         host = hosts[i % len(hosts)]
         try:
             url = f"https://{host}{path}"
             req = urllib.request.Request(url, headers=UA)
-            with urllib.request.urlopen(req, timeout=15, context=CONTEXT) as r:
+            with urllib.request.urlopen(req, timeout=timeout, context=CONTEXT) as r:
                 data = json.loads(r.read().decode("utf-8"))
                 logger.debug(f"东财请求成功: {host}{path}")
                 return data
         except Exception as e:
             last_err = e
             logger.debug(f"东财请求失败 {host}{path}: {e}")
-            if sleep_s:
-                time.sleep(sleep_s)
+            if i < max_retries - 1:
+                time.sleep(backoff[min(i, len(backoff) - 1)])
     raise last_err
 
 
@@ -142,20 +158,27 @@ class EastMoneyClient:
         )
         try:
             d = get_json(path, hosts=KLINE_HOSTS)
-            klines = (d.get("data") or {}).get("klines", [])
+            klines = (d.get("data") or {}).get("klines") or []
             result = []
             for line in klines:
                 p = line.split(",")
-                if len(p) >= 6:
-                    result.append({
-                        "date": p[0],
-                        "open": _num(p[1]),
-                        "close": _num(p[2]),
-                        "high": _num(p[3]),
-                        "low": _num(p[4]),
-                        "volume": _num(p[5]),
-                        "amount": _num(p[6]) if len(p) > 6 else None,
-                    })
+                if len(p) < 6:
+                    continue
+                result.append({
+                    "date": p[0],
+                    "open": _num(p[1]),
+                    "close": _num(p[2]),
+                    "high": _num(p[3]),
+                    "low": _num(p[4]),
+                    "volume": _num(p[5]),   # 单位：手（统一在 daily_to_dataframe 转股）
+                    "amount": _num(p[6]) if len(p) > 6 else None,
+                    "amplitude": _num(p[7]) if len(p) > 7 else None,
+                    "pct_chg": _num(p[8]) if len(p) > 8 else None,
+                    "change": _num(p[9]) if len(p) > 9 else None,
+                    "turnover": _num(p[10]) if len(p) > 10 else None,
+                })
+            if not result:
+                logger.warning(f"获取 {symbol} 日线为空（{KLINE_HOSTS[0]} 返回空 klines）")
             return result
         except Exception as e:
             logger.error(f"获取 {symbol} 日线失败: {e}")
@@ -292,7 +315,9 @@ def get_client() -> EastMoneyClient:
 
 # ===== 便捷函数：转 DataFrame 格式（兼容原有接口）=====
 def daily_to_dataframe(symbol: str, days: int = 60) -> pd.DataFrame:
-    """获取日线并转为标准 DataFrame（兼容原 data_collector 接口）"""
+    """获取日线并转为标准 DataFrame（兼容原 data_collector 接口）
+    统一口径：volume=股 / amount=元 / turnover=% / pct_chg=%
+    """
     client = get_client()
     klines = client.get_daily_kline(symbol, days=days)
     if not klines:
@@ -301,10 +326,16 @@ def daily_to_dataframe(symbol: str, days: int = 60) -> pd.DataFrame:
     df = pd.DataFrame(klines)
     df['date'] = pd.to_datetime(df['date'])
     df = df.set_index('date').sort_index()
+    df = df[~df.index.duplicated(keep='last')]
+    # 成交量：手 -> 股（与腾讯/新浪数据口径一致）
+    if 'volume' in df.columns:
+        df['volume'] = pd.to_numeric(df['volume'], errors='coerce') * 100
     # 补齐字段
     if 'turnover' not in df.columns:
         df['turnover'] = 0.0
-    if 'pct_chg' not in df.columns and 'close' in df.columns:
+    else:
+        df['turnover'] = pd.to_numeric(df['turnover'], errors='coerce').fillna(0.0)
+    if 'pct_chg' not in df.columns or df['pct_chg'].isna().all():
         df['pct_chg'] = df['close'].pct_change() * 100
     return df.tail(days)
 
@@ -318,13 +349,14 @@ def realtime_to_dataframe(symbols: List[str]) -> pd.DataFrame:
     
     rows = []
     for it in data:
+        vol = _num(it.get('f5'))
         rows.append({
             '代码': it.get('f12'),
             '名称': it.get('f14'),
             '最新价': _num(it.get('f2')),
             '涨跌幅': _num(it.get('f3')),
             '涨跌额': _num(it.get('f4')),
-            '成交量': _num(it.get('f5')),
+            '成交量': vol * 100 if vol is not None else None,  # 手 -> 股
             '成交额': _num(it.get('f6')),
             '振幅': _num(it.get('f7')),
             '换手率': _num(it.get('f8')),

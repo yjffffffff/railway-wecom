@@ -230,14 +230,16 @@ class StockSelector:
         self.sector_whitelist = config.get('sector_whitelist', [])
         self.fund_threshold = config.get('stock_selection', {}).get('fundamental_threshold', 60)
         self.min_setup_score = config.get('push_rules', {}).get('L4_stock_pick', {}).get('min_setup_score', 70)
+        self._name_cache = {}
     
     def scan_all(self) -> List[SetupResult]:
         """全量扫描白名单板块"""
-        results = []
+        analyzed = []
         for sector_cfg in self.sector_whitelist:
             sector_name = sector_cfg['name']
             symbols = self._get_sector_symbols(sector_cfg)
             logger.info(f"扫描板块 {sector_name}: {len(symbols)} 只")
+            self._prefetch_names(symbols[:30])
             
             for symbol in symbols[:30]:  # 限制每板块最多30只，避免超时
                 try:
@@ -247,14 +249,20 @@ class StockSelector:
                     fundamental = self.collector.get_financial_abstract(symbol)
                     name = self._get_stock_name(symbol)
                     result = self.analyzer.analyze(df, symbol, name, sector_name, fundamental)
-                    if result and result.setup_score >= self.min_setup_score:
-                        results.append(result)
+                    if result:
+                        analyzed.append(result)
                 except Exception as e:
                     logger.error(f"分析 {symbol} 失败: {e}")
                     continue
         
-        # 按评分排序
-        results.sort(key=lambda x: x.setup_score, reverse=True)
+        # 按评分排序；输出 TOP 便于确认取数与评分链路是否正常
+        analyzed.sort(key=lambda x: x.setup_score, reverse=True)
+        if analyzed:
+            top = "; ".join(
+                f"{r.name}({r.symbol}) {r.phase} {r.setup_score:.1f}" for r in analyzed[:3])
+            logger.info(f"评分 TOP3（推送阈值 {self.min_setup_score}）: {top}")
+        results = [r for r in analyzed if r.setup_score >= self.min_setup_score]
+        logger.info(f"扫描完成: 分析 {len(analyzed)} 只，达标 {len(results)} 只")
         return results
     
     def _get_sector_symbols(self, sector_cfg: dict) -> List[str]:
@@ -264,16 +272,38 @@ class StockSelector:
         # all_stocks = self.collector.get_sector_stocks(sector_cfg['name'])
         # return list(dict.fromkeys(leaders + all_stocks))[:50]
         return leaders
+
+    def _prefetch_names(self, symbols: List[str]):
+        """批量预取股票名称到本地缓存（一次请求，替代逐只拉全市场快照）"""
+        pending = [s for s in symbols if s not in self._name_cache]
+        if not pending:
+            return
+        try:
+            df = self.collector.get_realtime_quote(pending)
+            if df is None or df.empty or '名称' not in df.columns:
+                return
+            for _, row in df.iterrows():
+                code = str(row.get('代码') or '').strip()
+                name = row.get('名称')
+                if code and name:
+                    self._name_cache[code] = str(name)
+        except Exception as e:
+            logger.debug(f"预取名称失败: {e}")
     
     def _get_stock_name(self, symbol: str) -> str:
+        """获取股票名称：东财/腾讯实时快照 + 本地缓存
+        （旧实现每只股票都拉一次全市场快照，东财被限流时会拖垮整个扫描）
+        """
+        if symbol in self._name_cache:
+            return self._name_cache[symbol]
+        name = symbol
         try:
-            df = ak.stock_zh_a_spot_em()
-            row = df[df['代码'] == symbol]
-            if not row.empty:
-                return row.iloc[0]['名称']
-        except:
-            pass
-        return symbol
-
-
-import akshare as ak
+            df = self.collector.get_realtime_quote([symbol])
+            if df is not None and not df.empty and '名称' in df.columns:
+                val = df.iloc[0].get('名称')
+                if val:
+                    name = str(val)
+        except Exception as e:
+            logger.debug(f"获取 {symbol} 名称失败: {e}")
+        self._name_cache[symbol] = name
+        return name
