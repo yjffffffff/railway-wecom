@@ -54,8 +54,16 @@ jobs:
           if [ "${{ github.event.inputs.mode }}" = "test" ]; then
             python main.py --date "${{ github.event.inputs.date }}" --mode test
           else
-            python main.py --date "${{ github.event.inputs.date }}" --mode scan
+            # 定时任务在 15:30(北京时间, 收盘后) 触发，必须 --force 才能绕过
+            # frequency_control 的交易时段/静默期限制，否则全部推送会被静默丢弃
+            python main.py --date "${{ github.event.inputs.date }}" --mode scan --force
           fi
+
+      - name: Send daily recap summary
+        if: ${{ github.event.inputs.mode != 'test' }}
+        env:
+          WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
+        run: python send_daily_summary.py
 
       - name: Upload logs on failure
         if: failure()

@@ -1,6 +1,7 @@
-# 冰雪/旅游/周期股触发推送系统
+# A股多主线自适应轮动量化推送系统
 
-基于 Railway + 企微群机器人，实现「缩量下跌→底部平台→放量突破→回踩确认→退潮」五阶段形态的自动化监控与推送。
+基于 GitHub Actions / Railway + 企微，实现「缩量下跌→底部平台→放量突破→回踩确认→退潮」五阶段形态的全自动监控与推送，
+监控池（主线板块 + 龙头 + 全市场流动性核心池）**每周全自动轮换，零硬编码标的**。
 
 ## 核心逻辑
 
@@ -48,46 +49,71 @@ pip install -r requirements.txt
 # 测试模式（仅打印不推送）
 python main.py --date 2026-09-24 --mode test
 
-# 正式运行
-python main.py --date 2026-09-24 --mode scan
+# 正式运行（收盘后跑必须加 --force，否则被交易时段频控静默丢弃）
+python main.py --date 2026-09-24 --mode scan --force
+
+# 日报预览 / 正式推送
+python send_daily_summary.py --dry-run
+python send_daily_summary.py
+
+# 全市场自适应轮换（板块+龙头+流动性核心池，全部算法生成）
+python main.py --mode rebalance --no-notify
 ```
 
-### 4. Railway 部署
+### 4. Railway / GitHub Actions 部署
 1. 将代码推送到 GitHub 仓库
-2. Railway Dashboard → New Project → Deploy from GitHub
-3. 选择仓库，Railway 自动检测 `railway.toml` 和 `Dockerfile`
-4. 在 Variables 标签页添加环境变量（从 `.env` 复制）
-5. 部署成功后，可在 Settings → Cron Jobs 添加定时任务：
-   - Cron 表达式（UTC）：`30 7 * * 1-5`（北京时间周一至周五 15:30）
-   - Command：`python main.py --mode scan`
+2. Railway Dashboard → New Project → Deploy from GitHub（或直接用仓库内置的 GitHub Actions）
+3. 在 Variables / Repository secrets 添加环境变量（从 `.env` 复制）
+4. 定时任务（UTC）：
+   - `.github/workflows/push.yml`：`30 7 * * 1-5`（北京时间周一至周五 15:30）→ `python main.py --mode scan --force` + `python send_daily_summary.py`
+   - `.github/workflows/universe_rebalance.yml`：`30 0 * * 6`（北京时间周六 08:30）→ `python main.py --mode rebalance`，自动提交更新后的 `config/triggers.yaml`
+   - Railway Cron 等价配置：`30 7 * * 1-5` → `python main.py --mode scan --force`
+
+> ⚠️ 定时任务在 15:30（收盘后）执行，必须带 `--force`：`frequency_control.trading_hours_only=true`
+> 且 `quiet_hours` 覆盖 `15:00-09:15`，否则所有消息会被静默丢弃（日志显示"非交易时间/静默期，延迟推送"），
+> 表现为"任务成功但企微收不到推送"。
 
 ### 5. 手动触发/补数
 ```bash
 # Railway CLI
-railway run python main.py --date 2026-09-24 --mode scan
+railway run python main.py --date 2026-09-24 --mode scan --force
 
-# 或在 Dashboard 点击 Deploy → Deploy Latest
+# 或在 Dashboard 点击 Deploy → Deploy Latest；GitHub Actions 页面可 Run workflow
 ```
 
 ## 项目结构
 ```
 railway-wecom/
-├── main.py              # CLI 入口
+├── main.py              # CLI 入口（scan / test / rebalance）
 ├── config_loader.py     # 配置加载（YAML + ENV）
 ├── data_collector.py    # 数据采集（多源自动切换 + 熔断）
 ├── eastmoney_client.py  # 东财直连（快照/K线）
 ├── tencent_client.py    # 腾讯直连（日线/实时，云端友好）
 ├── stock_selector.py    # 选股引擎（五阶段评分）
+├── universe_updater.py  # 全市场自适应轮动池更新（板块/龙头/流动性核心池）
+├── send_daily_summary.py# 收盘复盘日报（动态日期 + 动态板块强弱榜）
 ├── push_engine.py       # 触发引擎 + 企微推送
 ├── check_sources.py     # 数据源连通性自检脚本
 ├── config/
-│   └── triggers.yaml    # 核心配置（板块/龙头/参数）
+│   ├── triggers.yaml    # 核心配置（sector_whitelist / focus_stocks 由脚本自动生成）
+│   └── universe_state.json # 上一期轮动快照（用于生成纳入/剔除差异）
+├── .github/workflows/
+│   ├── push.yml             # 盘中/收盘扫描 + 复盘日报
+│   └── universe_rebalance.yml # 每周六自动轮换监控池并提交
 ├── requirements.txt
 ├── Dockerfile
 ├── railway.toml
 ├── .env.example
 └── README.md
 ```
+
+## 监控池轮动机制
+- **全动态、零硬编码**：`sector_whitelist`（10 大主线 × 5 只龙头）与 `focus_stocks`（全市场成交额榜）全部由
+  `universe_updater.py` 依据真实行情（新浪行业/个股资金数据）生成，`config/triggers.yaml` 请勿手工维护标的。
+- **为什么周频而非日频**：五阶段模型依赖 10-60 日的平台蓄势与缩量结构，日频换池会不断打断形态识别；
+  周频（周六盘前）在时效性与样本连续性之间取平衡。
+- **风控过滤**：自动剔除 `ST / 退市 / 北交所(8、4、920 开头)` 标的，仅保留真实可交易品种。
+- **可追溯**：每期生成 `config/universe_state.json` 快照，轮换报告自动列出「新进池 / 移出池」名单并推送到企微。
 
 ## 数据源说明
 日线数据按 `data_source.daily_priority` 顺序自动切换，失败自动降级：
@@ -111,9 +137,11 @@ python check_sources.py 000962 600738
 输出各数据源可用性与耗时；只要「腾讯日线」或「akshare新浪日线」为 OK，工作流即可正常取数。
 
 ## 自定义扩展
-- **新增板块**：编辑 `config/triggers.yaml` 的 `sector_whitelist`
+- **新增/调整主线板块**：修改 `universe_updater.py` 的 `INDUSTRY_MAPPING`（行业节点 + 关键词 + 权重），
+  `sector_whitelist` 由脚本自动生成，不建议手工编辑标的
 - **调整参数**：修改 `selector`、`push_rules`、`frequency_control`
 - **新增触发器**：在 `TriggerEngine` 中添加 `check_xxx` 方法
+- **调整轮换节奏**：修改 `.github/workflows/universe_rebalance.yml` 的 cron（当前每周六 08:30 北京时间）
 
 ## 注意事项
 - akshare 请求频率限制：建议单次运行间隔 ≥30 秒
@@ -128,9 +156,17 @@ A: 东财 `push2his` K线接口对云端/机房 IP 会直接断连（akshare 日
 `日线获取成功: tencent（60 根）`；若仍失败，先执行 `python check_sources.py` 定位出口网络。
 
 **Q: 为什么没有推送？**
-A: L4 默认阈值较高（`push_rules.L4_stock_pick.min_setup_score`，默认 70）。
-日志中的 `评分 TOP3（推送阈值 70）`、`扫描完成: 分析 N 只，达标 M 只` 可用于确认取数与评分链路是否正常；
-需要放宽时降低该阈值或在 `config/triggers.yaml` 中调整。
+A: 两种典型原因：
+1. **频控静默**（最常见）：`frequency_control.trading_hours_only=true` 且 `quiet_hours` 含 `15:00-09:15`，
+   定时任务 15:30 触发时已收盘，所有消息会被丢弃（日志出现 `非交易时间/静默期，延迟推送`，任务本身却是 success）。
+   解决：收盘后的扫描/日报命令加 `--force`（仓库内置 workflow 已默认开启）。
+2. **评分未达标**：L4 默认阈值 `push_rules.L4_stock_pick.min_setup_score`（默认 70）。
+   日志中的 `评分 TOP3（推送阈值 70）`、`扫描完成: 分析 N 只，达标 M 只` 可用于确认取数与评分链路是否正常；
+   需要放宽时降低该阈值或在 `config/triggers.yaml` 中调整。
+
+**Q: 为什么轮动池是周更而不是日更？**
+A: 五阶段模型依赖 10-60 日的平台与缩量结构，日频换池会不断打断形态识别；周六盘前轮换既跟上资金主线切换，
+又保证样本在周内连续。轮换报告（企微）会列出本期「新进池 / 移出池」名单。
 
 ## 免责声明
 本系统仅供量化研究与监控辅助，**不构成投资建议**。实盘决策请结合基本面、资金面、风控体系综合判断。

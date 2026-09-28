@@ -59,16 +59,24 @@ def resolve_trade_date() -> date:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='冰雪/旅游周期股触发推送')
+    parser = argparse.ArgumentParser(description='A股多主线轮动与周期量化触发推送')
     parser.add_argument('--date', type=str, help='目标交易日 YYYY-MM-DD，默认最近交易日')
-    parser.add_argument('--mode', choices=['scan', 'test'], default='scan',
-                        help='scan=完整扫描推送, test=仅打印不推送')
+    parser.add_argument('--mode', choices=['scan', 'test', 'rebalance'], default='scan',
+                        help='scan=完整扫描推送, test=仅打印不推送, rebalance=全市场动态轮换更新股票池')
     parser.add_argument('--force', action='store_true', help='忽略频控强制推送')
+    parser.add_argument('--no-notify', action='store_true', help='动态轮换时不推送企微通知')
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+
+    # 若为 rebalance 模式，执行全市场白名单自动轮换
+    if args.mode == 'rebalance':
+        logger.info("=== 启动全市场自适应板块与股票池动态轮换 ===")
+        from universe_updater import run_update
+        ok = run_update(notify_wecom=not args.no_notify)
+        return 0 if ok else 1
     
     # 解析日期
     if args.date:
@@ -93,7 +101,7 @@ def main():
     
     # 测试模式：替换 pusher.push 为打印
     if args.mode == 'test':
-        def test_push(msg):
+        def test_push(msg, force=False):
             logger.info(f"[TEST PUSH] {msg.msg_type} | {msg.title} | {msg.content}")
             print(f"\n--- 推送预览 ---\n{msg}")
             return True

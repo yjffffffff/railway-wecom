@@ -1,0 +1,83 @@
+name: Universe Auto Rebalance
+
+# 全市场自适应轮动池自动更新（板块 + 龙头 + 流动性核心池全部动态生成）
+# 为什么是周频而不是日频：五阶段模型依赖 10-60 日平台/缩量结构，
+# 每日换池会打断形态识别，故固定每周六盘前轮换一次。
+
+on:
+  schedule:
+    # UTC 00:30 周六 = 北京时间 08:30 周六（非交易时段，不与盘中扫描冲突）
+    - cron: '30 0 * * 6'
+  workflow_dispatch:
+    inputs:
+      notify:
+        description: 'Push WeCom rotation report'
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+
+env:
+  PYTHON_VERSION: '3.11'
+  WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
+  TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+  AKSHARE_ENABLED: 'true'
+  EASTMONEY_ENABLED: 'true'
+  TENCENT_ENABLED: 'true'
+  EM_OVERSEAS: 'true'
+  LOG_LEVEL: 'INFO'
+  TIMEZONE: 'Asia/Shanghai'
+
+permissions:
+  contents: write
+
+jobs:
+  rebalance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run universe rebalance
+        env:
+          WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
+        run: |
+          if [ "${{ github.event.inputs.notify }}" = "false" ]; then
+            python main.py --mode rebalance --no-notify
+          else
+            python main.py --mode rebalance
+          fi
+
+      - name: Commit updated universe
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add config/triggers.yaml config/universe_state.json
+          if git diff --cached --quiet; then
+            echo "轮动池与上期一致，跳过提交"
+          else
+            git commit -m "chore(universe): 自动轮换监控池 $(date -u +%Y-%m-%d)"
+            git push
+          fi
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rebalance-logs
+          path: |
+            *.log
+            logs/
+          retention-days: 7
