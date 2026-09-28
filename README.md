@@ -81,7 +81,20 @@ railway run python main.py --date 2026-09-24 --mode scan --force
 # 或在 Dashboard 点击 Deploy → Deploy Latest；GitHub Actions 页面可 Run workflow
 ```
 
-## 项目结构
+### 6. 国内网络推送 / 拉取（GitHub 直连被重置时）
+```bash
+# 仓库已内置 mirror remote（ghfast.top 反向代理，读写均可，实测可 push）
+git push mirror main
+
+# 或临时用任意 gh-proxy 系镜像推送（示例）
+git push https://<user>:<token>@ghfast.top/https://github.com/yjffffffff/railway-wecom.git main:main
+
+# 仅拉取时也可用只读镜像
+git clone https://ghproxy.net/https://github.com/yjffffffff/railway-wecom.git
+```
+> 说明：`github.com:443` 在部分网络下会被重置（`Recv failure: Connection was reset`），
+> 此时走 gh-proxy 系镜像即可（`ghfast.top` / `gh-proxy.com` / `ghproxy.net` 已验证可读，`ghfast.top` 可写）。
+
 ```
 railway-wecom/
 ├── main.py              # CLI 入口（scan / test / rebalance）

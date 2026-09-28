@@ -1,4 +1,4 @@
-name: Ice-Snow Cycle Stock Push
+name: A-Share Rotation Scan & Recap
 
 on:
   schedule:
