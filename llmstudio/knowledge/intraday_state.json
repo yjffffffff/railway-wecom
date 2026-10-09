@@ -1,0 +1,23 @@
+{
+ "000021": {
+  "date": "2026-09-21",
+  "fired": {
+   "above_ma5": true,
+   "vol": true
+  }
+ },
+ "000034": {
+  "date": "2026-09-21",
+  "fired": {
+   "above_ma5": true,
+   "vol": true
+  }
+ },
+ "000938": {
+  "date": "2026-09-21",
+  "fired": {
+   "above_ma5": true,
+   "vol": true
+  }
+ }
+}

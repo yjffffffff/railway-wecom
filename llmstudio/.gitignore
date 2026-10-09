@@ -1,0 +1,42 @@
+# ĺŤć¨éĺŻéĽďźçŚć­˘ä¸äź ďźäşçŤŻç¨GitHub SecretsäťŁćżďź
+push_config.json
+briefing_log.txt
+news_24h.json
+movers.json
+__pycache__/
+*.pyc
+
+# ćŹĺ°ĺ¤§ćäťś/ć ĺłéĄšçŽďźçŚć­˘ä¸äź 
+models/
+Bionic/
+flappybird/
+tetris/
+*.gguf
+
+# ćŹĺ°č°čŻ/ä¸´ćśćäťśďźçŚć­˘ä¸äź 
+apply_patch.py
+extract_section.py
+fix_indent.py
+test_push.py
+test_watch_api.py
+check_watchlist.py
+patch_*.py
+review_*.log
+test_monitor_once.py
+tt.py
+pp1.py
+*_out.txt
+chk.txt
+fetch_sent
+
+# Î˘ĐĹtokenťş´ćÓëÁŮĘą˛šśĄ
+knowledge/wechat_token.json
+wp.py
+twr.py
+test_wx_review.py
+scheduler_log.txt
+scheduler_state.json
+push_token.txt
+railway_cli.zip
+railway_cli/
+tpl_raw.json

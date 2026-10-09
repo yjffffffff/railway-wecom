@@ -1,0 +1,30 @@
+name: LLMStudio Ziguang Intraday Monitor
+
+# 紫光股份盘中监控：定时推送已停用（节省额度），本工作流仅保留手动触发
+on:
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: llmstudio
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run intraday monitor and push
+        env:
+          BARK_URL: ${{ secrets.BARK_URL }}
+          SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
+          WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK_URL }}
+          PUSH_ENABLED: 'true'
+        run: python ziguang_intraday_monitor.py

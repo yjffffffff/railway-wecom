@@ -1,0 +1,37 @@
+name: LLMStudio Build GitHub Pages
+
+# 每次推送briefings后重建静态网页（也可手动触发）
+on:
+  push:
+    paths:
+      - 'llmstudio/briefings/**'
+      - 'llmstudio/build_pages.py'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    working-directory: llmstudio
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build HTML pages
+        run: python build_pages.py
+      - name: Publish docs to repo root (GitHub Pages 只能从根目录 /docs 服务)
+        working-directory: .
+        run: |
+          rm -rf docs
+          cp -r llmstudio/docs docs
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/
+          git diff --staged --quiet || git commit -m "build pages $(date -u +%F)"
+          git push

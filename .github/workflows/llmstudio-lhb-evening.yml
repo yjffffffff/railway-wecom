@@ -1,0 +1,44 @@
+name: LLMStudio LHB Evening Briefing
+
+# 龙虎榜晚间解读（已停用2026-09-23，用户要求暂停龙虎榜）
+on:
+  # schedule:
+  #   - cron: '30 10 * * 1-5'
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: llmstudio
+
+jobs:
+  lhb:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Generate LHB briefing and push
+        env:
+          BARK_URL: ${{ secrets.BARK_URL }}
+          SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
+          WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK_URL }}
+          PUSH_ENABLED: 'true'
+        run: python generate_lhb.py
+
+      - name: Commit LHB archive
+        continue-on-error: true
+        working-directory: .
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add llmstudio/briefings/ llmstudio/movers.json
+          git diff --staged --quiet || git commit -m "lhb briefing $(date -u +%F)"
+          git push

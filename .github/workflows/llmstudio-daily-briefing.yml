@@ -1,0 +1,50 @@
+name: LLMStudio Daily News Briefing
+
+# 每天北京时间07:35（UTC 23:35）触发，抵消GitHub排队延迟，确保8:00左右送达
+on:
+  schedule:
+    - cron: '35 23 * * *'
+  workflow_dispatch:   # 支持手动触发，方便测试
+
+defaults:
+  run:
+    working-directory: llmstudio
+
+jobs:
+  briefing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # 允许工作流把早报归档commit推回仓库
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Generate briefing and push
+        env:
+          # 云端LLM API（在仓库Settings→Secrets中配置）
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_API_URL: ${{ secrets.LLM_API_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          # 推送密钥（WECOM_WEBHOOK_URL复用本仓库已有secret）
+          BARK_URL: ${{ secrets.BARK_URL }}
+          SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
+          WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK_URL }}
+          PUSH_ENABLED: 'true'
+        run: python generate_briefing.py
+
+      - name: Commit briefing archive
+        continue-on-error: true   # 归档失败不影响生成和推送
+        working-directory: .
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add llmstudio/briefings/
+          git diff --staged --quiet || git commit -m "daily briefing $(date -u +%F)"
+          git push

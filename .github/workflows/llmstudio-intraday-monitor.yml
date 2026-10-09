@@ -1,0 +1,35 @@
+name: LLMStudio Intraday Monitor (Long Loop)
+
+# 自选股盘中实时监控（长循环模式）
+# 北京时间9:20触发一次，单进程循环轮询至15:05收盘自动退出
+# 注意：GitHub Actions定时仍有3-10分钟排队延迟，故提前到9:20启动
+on:
+  # 盘中监控定时已停用（2026-09-23，用户要求；推送统一由调度器负责）
+  # schedule:
+  #   - cron: '20 1 * * 1-5'   # 北京时间9:20（UTC 1:20）启动长循环
+  workflow_dispatch:          # 仅保留手动触发测试
+
+defaults:
+  run:
+    working-directory: llmstudio
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360     # 长循环需覆盖全交易时段（约6小时）
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run intraday long-loop monitor
+        env:
+          BARK_URL: ${{ secrets.BARK_URL }}
+          SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
+          WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK_URL }}
+          PUSH_ENABLED: 'true'
+        run: python intraday_monitor.py

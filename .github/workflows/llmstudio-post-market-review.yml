@@ -1,0 +1,54 @@
+name: LLMStudio Post Market Review
+
+# 北京时间15:30（UTC 7:30）收盘后运行，周一至周五
+on:
+  schedule:
+    - cron: '30 7 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      push:
+        description: '推送到推送通道（测试时关闭以省额度）'
+        type: boolean
+        default: false
+
+defaults:
+  run:
+    working-directory: llmstudio
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Generate post-market review and push
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_API_URL: ${{ secrets.LLM_API_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          BARK_URL: ${{ secrets.BARK_URL }}
+          SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
+          WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK_URL }}
+          # 定时运行自动推送；手动测试时按输入框push勾选决定
+          PUSH_ENABLED: ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.push == 'true' && 'true' || 'false') }}
+        run: python generate_review.py
+
+      - name: Commit review archive
+        continue-on-error: true
+        working-directory: .
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add llmstudio/briefings/ || true
+          git add llmstudio/knowledge/ || true
+          git diff --staged --quiet || git commit -m "post market review $(date -u +%F)"
+          git push
