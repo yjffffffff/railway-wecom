@@ -24,6 +24,25 @@
 
 综合评分 = 形态分(40) + 基本面分(30) + 强弱度分(30)
 
+### 宽基估值分位加减仓提醒（收盘前约 15 分钟）
+
+对 6 个宽基指数（**科创50 / 深证100 / 中证500 / 创业板50 / 中证A50 / 纳指100**）计算 PE、PB 的历史百分位，
+结合近 3 个月分位变化方向，给出 **加仓 / 减仓 / 不动** 的加减仓建议，并在收盘前约 15 分钟推送到企微。
+
+| 指数 | 数据源 | 说明 |
+|------|--------|------|
+| 科创50 / 深证100 / 中证500 / 创业板50 / 中证A50 | 乐咕乐股 `index-basic-pe/pb` | 按月全历史 PE(TTM)、PB，直接返回百分位 + 用于趋势的历史分位序列 |
+| 纳指100 | siblisresearch | 逐年 Trailing P/E 样本计算 PE 百分位；PB 无免费历史源，置为「—」 |
+
+判定规则（综合分位 = PE、PB 分位均值；再叠加近 3 月分位变化）：
+- 综合分位 **≤ 30%**：低估 → 🟢 **加仓**（分位仍在快速下行则「加大定投」）
+- 综合分位 **≥ 70%**：高估 → 🔴 **减仓**（分位仍在上行则「逢高止盈」）
+- 综合分位 **30%~70%**：中枢 → 🟡 **不动**（明显下行可小额定投、明显上行则暂停加仓持观）
+
+> 数据源均为免登录/免密钥的直连接口，仅依赖 `requests`；乐咕对高频请求会限流，已内置「换 CSRF 重试 + 2s 节流」。
+> 触发时间：GitHub Actions `20 6 * * 1-5`（北京 14:20 提前触发），脚本取数后**等待到 14:45（收盘前15分钟）再推送**，
+> 以此抵消 GitHub Actions 3~10 分钟的排队延迟，确保推送时刻稳定锚定在收盘前 15 分钟。本地/ Railway 可用 `VALUATION_PUSH_AT` 调整目标时刻。
+
 ## 部署步骤
 
 ### 1. 准备企微推送渠道
@@ -56,6 +75,10 @@ python main.py --date 2026-09-24 --mode scan --force
 python send_daily_summary.py --dry-run
 python send_daily_summary.py
 
+# 宽基估值分位加减仓提醒（收盘前约15分钟推送；仅依赖 requests 直连乐咕/siblis）
+python send_valuation_alert.py --dry-run
+python send_valuation_alert.py
+
 # 全市场自适应轮换（板块+龙头+流动性核心池，全部算法生成）
 python main.py --mode rebalance --no-notify
 ```
@@ -66,12 +89,16 @@ python main.py --mode rebalance --no-notify
 3. 在 Variables / Repository secrets 添加环境变量（从 `.env` 复制）
 4. 定时任务（UTC）：
    - `.github/workflows/push.yml`：`30 7 * * 1-5`（北京时间周一至周五 15:30）→ `python main.py --mode scan --force` + `python send_daily_summary.py`
+   - `.github/workflows/valuation_alert.yml`：`20 6 * * 1-5`（北京时间周一至周五 14:20 触发，脚本等待到 **14:45 收盘前15分钟**再推送）→ `python send_valuation_alert.py`，推送宽基估值分位加减仓建议
    - `.github/workflows/universe_rebalance.yml`：`30 0 * * 6`（北京时间周六 08:30）→ `python main.py --mode rebalance`，自动提交更新后的 `config/triggers.yaml`
-   - Railway Cron 等价配置：`30 7 * * 1-5` → `python main.py --mode scan --force`
+   - Railway Cron 等价配置：`30 7 * * 1-5` → `python main.py --mode scan --force`；估值提醒 `20 6 * * 1-5` → `python send_valuation_alert.py`
 
 > ⚠️ 定时任务在 15:30（收盘后）执行，必须带 `--force`：`frequency_control.trading_hours_only=true`
 > 且 `quiet_hours` 覆盖 `15:00-09:15`，否则所有消息会被静默丢弃（日志显示"非交易时间/静默期，延迟推送"），
 > 表现为"任务成功但企微收不到推送"。
+>
+> 估值分位提醒（`send_valuation_alert.py`）不走 `frequency_control`，直接用群机器人 Webhook 推送，
+> 因此**不受交易时段/静默期限制**；为抵消 GitHub Actions 排队延迟，工作流 14:20 触发、脚本等待到 14:45（收盘前15分钟）再推送。
 
 ### 5. 手动触发/补数
 ```bash
@@ -105,6 +132,8 @@ railway-wecom/
 ├── stock_selector.py    # 选股引擎（五阶段评分）
 ├── universe_updater.py  # 全市场自适应轮动池更新（板块/龙头/流动性核心池）
 ├── send_daily_summary.py# 收盘复盘日报（动态日期 + 动态板块强弱榜）
+├── index_valuation.py   # 宽基估值分位（PE/PB百分位 + 加减仓建议，乐咕/siblis直连）
+├── send_valuation_alert.py # 收盘前估值分位加减仓提醒推送
 ├── push_engine.py       # 触发引擎 + 企微推送
 ├── check_sources.py     # 数据源连通性自检脚本
 ├── config/
@@ -112,6 +141,7 @@ railway-wecom/
 │   └── universe_state.json # 上一期轮动快照（用于生成纳入/剔除差异）
 ├── .github/workflows/
 │   ├── push.yml             # 盘中/收盘扫描 + 复盘日报
+│   ├── valuation_alert.yml  # 收盘前宽基估值分位加减仓提醒
 │   └── universe_rebalance.yml # 每周六自动轮换监控池并提交
 ├── requirements.txt
 ├── Dockerfile

@@ -1,0 +1,49 @@
+name: Broad Index Valuation Alert (pre-close)
+
+# 收盘前15分钟推送宽基估值分位加减仓建议
+# A股15:00收盘，目标14:45推送。GitHub Actions定时有3-10分钟（高峰更久）排队延迟，
+# 故工作流提前到北京时间14:20（UTC 6:20）触发，脚本先取数、再等待到14:45整点推送，
+# 使实际推送时刻锚定在"收盘前15分钟"，不受排队延迟影响。
+on:
+  schedule:
+    - cron: '20 6 * * 1-5'   # UTC 6:20 = 北京 14:20，周一至周五
+  workflow_dispatch:          # 支持手动触发测试
+
+env:
+  PYTHON_VERSION: '3.11'
+  WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
+  VALUATION_PUSH_AT: '14:45'      # 目标推送时刻（北京）= 收盘前15分钟
+  VALUATION_MAX_WAIT_MIN: '45'    # 最长等待45分钟，超时则立即推送
+  AKSHARE_ENABLED: 'true'
+  EM_OVERSEAS: 'true'
+  LOG_LEVEL: 'INFO'
+  TIMEZONE: 'Asia/Shanghai'
+
+jobs:
+  valuation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30           # 需覆盖取数 + 最长等待45分钟的兜底
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # 估值分位仅依赖 requests（乐咕 + siblisresearch 直连），无需 tushare/akshare
+      # 脚本会等待到 VALUATION_PUSH_AT（默认14:45）再推送，抵消 Actions 排队延迟
+      - name: Push broad index valuation & add/reduce suggestion (pre-close)
+        env:
+          WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
+          VALUATION_PUSH_AT: '14:45'
+          VALUATION_MAX_WAIT_MIN: '45'
+        run: python send_valuation_alert.py
+
